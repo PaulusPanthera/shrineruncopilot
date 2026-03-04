@@ -1249,3 +1249,13 @@ This patch implements the most important missing effects while keeping determini
 - `js/ui/tabs/unlockedTab.js`
 - `REPORT.md`
 
+
+## PATCH 39c — Prevent stale JSON cache on reload
+
+- GitHub Pages (and some browsers) can keep serving cached JSON assets after deployment.
+- Data loads now use `fetch(..., { cache: 'no-store' })` so a normal refresh reliably picks up updated `moves.json` (and other data) without needing a hard refresh.
+
+### Touched files
+- `js/data/loadData.js`
+- `REPORT.md`
+

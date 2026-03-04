@@ -53,15 +53,17 @@ function deriveTagsForSpecies(species, claimedSet, moveDb){
 
   return uniq(out);
 }
+// NOTE: GitHub Pages can aggressively cache JSON assets across deployments.
+// Use `cache: 'no-store'` so a normal reload reliably picks up updated data.
 async function fetchJson(path){
-  const r = await fetch(path);
+  const r = await fetch(path, { cache: 'no-store' });
   if (!r.ok) throw new Error(`Failed to fetch ${path}: ${r.status}`);
   return await r.json();
 }
 
 async function fetchJsonOptional(path, fallback){
   try{
-    const r = await fetch(path);
+    const r = await fetch(path, { cache: 'no-store' });
     if (!r.ok) return fallback;
     return await r.json();
   }catch{
