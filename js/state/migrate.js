@@ -132,9 +132,7 @@ export function hydrateState(raw, defaultState, data){
   // Ensure shared team starting items exist (do not overwrite existing counts)
   if (!('Evo Charm' in state.bag)) state.bag['Evo Charm'] = (defaultState.bag && defaultState.bag['Evo Charm']) ? defaultState.bag['Evo Charm'] : 2;
   if (!('Strength Charm' in state.bag)) state.bag['Strength Charm'] = (defaultState.bag && defaultState.bag['Strength Charm']) ? defaultState.bag['Strength Charm'] : 2;
-  // Legacy default used 8 each; normalize to team-run default (2 each) unless user has already edited.
-  if (state.bag['Evo Charm'] === 8) state.bag['Evo Charm'] = 2;
-  if (state.bag['Strength Charm'] === 8) state.bag['Strength Charm'] = 2;
+  // NOTE: Do NOT clamp charm counts (e.g. 8->2). Users can legitimately buy/earn these.
   state.wavePlans = state.wavePlans || {};
   state.evoCache = state.evoCache || {};
   state.baseCache = state.baseCache || {};

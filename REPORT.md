@@ -1282,3 +1282,16 @@ This patch implements the most important missing effects while keeping determini
 - `js/ui/tabs/waves/planner/wavePlannerPanel.js`
 - `REPORT.md`
 
+
+## PATCH 45 — Evo moveset sync + preserve charm counts on migrate
+
+- Fix: when a roster mon is evolved (effective species differs), its 4-move pool is rebuilt from the **effective species claimed set** (with the existing override rules applied).
+  - Preserves PP/use/prio when possible.
+  - Includes Hidden Power(Type) → same-type evolved move mapping (e.g. **Hidden Power (Steel)** → **Flash Cannon** on Empoleon while preserving PP).
+- Fix: migration no longer clamps charm counts (e.g. legacy **8 → 2**). Users can legitimately buy/earn these; clamping caused evo toggles to be dropped via bag constraint enforcement.
+
+### Touched files
+- `js/domain/roster.js`
+- `js/state/migrate.js`
+- `REPORT.md`
+

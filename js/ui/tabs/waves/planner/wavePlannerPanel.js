@@ -641,13 +641,16 @@ function renderWavePlanner(state, waveKey, slots, wp){
     };
   };
 
-  const bestMoveForMon = (att, defSlot)=>{
+  // NOTE: Fight plan display picks "best" moves for multiple defenders. To avoid misleading
+  // repeats when a move has low PP (e.g., 1 PP left), callers can pass a temporary ppMap
+  // (ppBudget) that is decremented as we lay out the plan lines.
+  const bestMoveForMon = (att, defSlot, ppMapOverride=null)=>{
     if (!att || !defSlot) return null;
     const atk = {species:(att.effectiveSpecies||att.baseSpecies), level: state.settings.claimedLevel, ivAll: state.settings.claimedIV, evAll: att.strength?state.settings.strengthEV:state.settings.claimedEV};
     const def = {species:defSlot.defender, level:defSlot.level, ivAll: state.settings.wildIV, evAll: state.settings.wildEV};
 
     const forced = (wp && wp.attackMoveOverride) ? (wp.attackMoveOverride[att.id] || null) : null;
-    const pool = filterMovePoolForCalc({ppMap: state.pp || {}, monId: att.id, movePool: att.movePool || [], forcedMoveName: forced});
+    const pool = filterMovePoolForCalc({ppMap: ppMapOverride || state.pp || {}, monId: att.id, movePool: att.movePool || [], forcedMoveName: forced});
 
     const sW0 = settingsForWave(state, wp, att.id, defSlot.rowKey, defSlot.defender);
     const sWInt = applyEnemyIntimidateToSettings(sW0, att, leadIntCount);
@@ -710,6 +713,31 @@ function renderWavePlanner(state, waveKey, slots, wp){
   const planTable = el('div', {class:'plan'});
 
   if (a0 && a1 && lead0 && lead1){
+    // Local PP budget for rendering the plan lines (does not mutate real state).
+    // This prevents "uses Ice Punch twice" style display when only 1 PP remains.
+    const ppBudget = JSON.parse(JSON.stringify(state.pp || {}));
+    const initBudgetForMon = (mon)=>{
+      if (!mon || !mon.id) return;
+      const id = mon.id;
+      ppBudget[id] = ppBudget[id] || {};
+      for (const m of (mon.movePool||[])){
+        if (!m || m.use === false || !m.name) continue;
+        const src = state.pp?.[id]?.[m.name];
+        if (src) ppBudget[id][m.name] = JSON.parse(JSON.stringify(src));
+        else if (!ppBudget[id][m.name]) ppBudget[id][m.name] = {cur: DEFAULT_MOVE_PP, max: DEFAULT_MOVE_PP};
+      }
+    };
+    const reservePPUse = (monId, moveName)=>{
+      if (!monId || !moveName) return;
+      ppBudget[monId] = ppBudget[monId] || {};
+      const ent = ppBudget[monId][moveName] || {cur: DEFAULT_MOVE_PP, max: DEFAULT_MOVE_PP};
+      const cur = Number(ent.cur ?? ent.max ?? DEFAULT_MOVE_PP);
+      ent.cur = Math.max(0, cur - 1);
+      ppBudget[monId][moveName] = ent;
+    };
+    initBudgetForMon(a0);
+    initBudgetForMon(a1);
+
     const mA0 = bestMoveForMon(a0, lead0);
     const mA1 = bestMoveForMon(a0, lead1);
     const mB0 = bestMoveForMon(a1, lead0);
@@ -717,6 +745,10 @@ function renderWavePlanner(state, waveKey, slots, wp){
     const chosen = chooseLeadAssignment(mA0,mA1,mB0,mB1);
     const left = chosen.swap ? {att:a0, def:lead1, best:mA1} : {att:a0, def:lead0, best:mA0};
     const right = chosen.swap ? {att:a1, def:lead0, best:mB0} : {att:a1, def:lead1, best:mB1};
+
+    // Reserve the two lead actions so later "bench" coverage uses the remaining PP.
+    reservePPUse(left.att?.id, left.best?.move);
+    reservePPUse(right.att?.id, right.best?.move);
     const prAvg = ((left.best?.prio ?? 9) + (right.best?.prio ?? 9)) / 2;
 
     // Deterministic 1-turn min-roll sim for the chosen lead assignment.
@@ -1333,9 +1365,13 @@ function renderWavePlanner(state, waveKey, slots, wp){
     if (bench.length){
       const benchLines = [];
       for (const ds of bench){
-        const am = bestMoveForMon(a0, ds);
-        const bm = bestMoveForMon(a1, ds);
-        const pick = (am && am.oneShot && (!bm || !bm.oneShot || (am.prio??9) <= (bm.prio??9))) ? {who:rosterLabel(a0), m:am} : {who:rosterLabel(a1), m:bm};
+        const am = bestMoveForMon(a0, ds, ppBudget);
+        const bm = bestMoveForMon(a1, ds, ppBudget);
+        const pick = (am && am.oneShot && (!bm || !bm.oneShot || (am.prio??9) <= (bm.prio??9)))
+          ? {monId: a0.id, who:rosterLabel(a0), m:am}
+          : {monId: a1.id, who:rosterLabel(a1), m:bm};
+        // Reserve the displayed bench pick so subsequent duplicates reflect PP.
+        reservePPUse(pick.monId, pick.m?.move);
         benchLines.push(`${ds.defender}: ${pick.who} ${pick.m?.move||'—'} (P${pick.m?.prio||'?'} ${formatPct(pick.m?.minPct||0)})`);
       }
       planTable.appendChild(el('div', {class:'muted small', style:'margin-top:8px'}, `Bench: ${benchLines.join(' · ')}`));

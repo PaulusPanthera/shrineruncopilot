@@ -325,11 +325,29 @@ export function applyCharmRulesSync(data, state, entry){
     const eff = entry.effectiveSpecies || entry.baseSpecies;
     entry.movePool = entry.movePool || [];
     const names = entry.movePool.map(m => m.name);
+    // Desired 4-move baseline comes from the claimed set of the *effective* species when available.
+    // This is required for evo-only move swaps (e.g. Piplup's Hidden Power (Steel) -> Empoleon's Flash Cannon).
+    const claimed = (data?.claimedSets?.[eff]?.moves && Array.isArray(data.claimedSets[eff].moves))
+      ? data.claimedSets[eff].moves.slice(0, 4)
+      : names.slice(0, 4);
+    const desired = applyMovesetOverrides(eff, claimed);
+
     const overridden = applyMovesetOverrides(eff, names);
     const looksBase = entry.movePool.length <= 4 && entry.movePool.every(m => (m.source || 'base') === 'base');
+    const evolved = !!entry.evo && String(eff||'') && String(eff||'') !== String(entry.baseSpecies||'');
 
-    // If the override is a full 4-move set, only enforce it when the pool still looks "base".
-    if (looksBase && overridden && overridden.length === 4 && !overridden.every((v,i)=>v===names[i])){
+    const arraysEq4 = (a,b)=>{
+      if (!Array.isArray(a) || !Array.isArray(b)) return false;
+      for (let i=0;i<4;i++) if (String(a[i]||'') !== String(b[i]||'')) return false;
+      return true;
+    };
+
+    // Rebuild the 4-move pool when:
+    // - the mon is evolved (effective species differs), or
+    // - the pool still looks "base" and a full 4-move desired set differs.
+    // Preserve PP/use/prio where possible (including Hidden Power (Type) -> same-type evolved move).
+    const shouldRebuild = (Array.isArray(desired) && desired.length === 4) && (evolved || (looksBase && !arraysEq4(desired, names)));
+    if (shouldRebuild){
       const prev = new Map(entry.movePool.map(m => [m.name, m]));
       // Some base forms use a Hidden Power variant that becomes a stronger same-type move on evolution.
       // Preserve PP (and intent toggles) by matching new move's type against old Hidden Power (Type).
@@ -344,7 +362,7 @@ export function applyCharmRulesSync(data, state, entry){
         if (!hpByType.has(t)) hpByType.set(t, []);
         hpByType.get(t).push(m);
       }
-      const rebuilt = buildDefaultMovePool(data, eff, overridden, 'base', entry.ability || '', {state, entry});
+      const rebuilt = buildDefaultMovePool(data, eff, desired, 'base', entry.ability || '', {state, entry});
       // Preserve PP + use when the same move name exists.
       for (const mv of rebuilt){
         const old = prev.get(mv.name);
