@@ -1547,5 +1547,16 @@
     "targets": "Def",
     "type": "Psychic",
     "uses": "Atk"
+  },
+  "Fling": {
+    "accuracy": 100.0,
+    "category": "Physical",
+    "name": "Fling",
+    "notes": "Varies by held item. Placeholder power=50; use BP override debug tool if needed.",
+    "power": 50.0,
+    "priority": 0,
+    "targets": "Def",
+    "type": "Dark",
+    "uses": "Atk"
   }
 }

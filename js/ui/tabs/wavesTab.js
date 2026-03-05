@@ -260,6 +260,18 @@ function awardCheckpoint1RewardOnce(st){
   return true;
 }
 
+function awardCheckpoint2RewardOnce(st){
+  // CP2 reward: +10 gold + 1× TM - Fling (placeholder; move list contains Fling).
+  ensureNianCheckpointState(st);
+  if (st.checkpoints.nianBoss.cp2RewardClaimed) return false;
+  st.shop = st.shop || {gold:0, ledger:[]};
+  st.shop.gold = Math.max(0, Math.floor(Number(st.shop.gold||0) + 10));
+  st.bag = st.bag || {};
+  st.bag['TM - Fling'] = Number(st.bag['TM - Fling']||0) + 1;
+  st.checkpoints.nianBoss.cp2RewardClaimed = {ts: Date.now(), gold: 10, items: {'TM - Fling': 1}};
+  return true;
+}
+
 function renderNianCheckpointPanel(ctx, state, idx){
   const { store } = ctx;
   const cp = mergeCheckpoint(state, idx);
@@ -268,6 +280,8 @@ function renderNianCheckpointPanel(ctx, state, idx){
   const title = `Nian Boss Checkpoint ${idx}`;
   const rewardText = (idx === 1)
     ? 'Reward: +10 gold + 1× Revive (once)'
+    : (idx === 2)
+      ? 'Reward: +10 gold + 1× TM - Fling (once)'
     : 'PP log only';
 
   const loggedRec = state?.checkpoints?.nianBoss?.[`cp${idx}Logged`] || null;
@@ -393,6 +407,14 @@ function renderNianCheckpointPanel(ctx, state, idx){
         }
       }
 
+      // Reward: checkpoint 2 only, only if something actually deducted.
+      if (idx === 2 && totalDec > 0){
+        const did = awardCheckpoint2RewardOnce(st);
+        if (did){
+          last.reward = { gold: 10, tmFling: 1, claimed: true };
+        }
+      }
+
       // Mark checkpoint as logged (overview cue on the divider).
       if (totalDec > 0){
         st.checkpoints = st.checkpoints || {};
@@ -440,6 +462,18 @@ function renderNianCheckpointPanel(ctx, state, idx){
         if (next <= 0) delete st.bag['Revive'];
         else st.bag['Revive'] = next;
         if (st.checkpoints?.nianBoss?.cp1RewardClaimed) delete st.checkpoints.nianBoss.cp1RewardClaimed;
+      }
+
+      // Undo reward if it was claimed on this action.
+      if (idx === 2 && rec.reward?.claimed){
+        st.shop = st.shop || {gold:0, ledger:[]};
+        st.shop.gold = Math.max(0, Math.floor(Number(st.shop.gold||0) - Number(rec.reward.gold||0)));
+        st.bag = st.bag || {};
+        const cur = Number(st.bag['TM - Fling']||0);
+        const next = Math.max(0, cur - Number(rec.reward.tmFling||0));
+        if (next <= 0) delete st.bag['TM - Fling'];
+        else st.bag['TM - Fling'] = next;
+        if (st.checkpoints?.nianBoss?.cp2RewardClaimed) delete st.checkpoints.nianBoss.cp2RewardClaimed;
       }
 
       rec.undone = true;
@@ -505,7 +539,7 @@ function renderNianCheckpointPanel(ctx, state, idx){
     btnClean,
     btnUndo,
     btnAdv,
-    el('div', {class:'pill info'}, (idx === 1)
+    el('div', {class:'pill info'}, (idx === 1 || idx === 2)
       ? 'Fight gives reward if PP was logged'
       : 'Fight logs PP'
     ),
