@@ -11,6 +11,7 @@ import {
   enemyThreatForMatchup,
   assumedEnemyThreatForMatchup,
   phaseDefenderLimit,
+  chooseBestMoveDisciplined,
 } from '../../../../domain/waves.js';
 import {
   ITEM_CATALOG,
@@ -614,7 +615,18 @@ function renderWavePlanner(state, waveKey, slots, wp){
 
   const lead0 = picked[0]?.slot || null;
   const lead1 = picked[1]?.slot || null;
-  const leadIntCount = [lead0, lead1].filter(x => (x?.tags||[]).includes('INT')).length;
+  const hasInt = (ds)=> (ds?.tags||[]).includes('INT');
+  const leadIntCount = [lead0, lead1].filter(hasInt).length;
+  const reinf3 = allDef[2] || null;
+  const reinf4 = allDef[3] || null;
+  const reinf3Int = hasInt(reinf3) ? 1 : 0;
+  const reinf4Int = hasInt(reinf4) ? 1 : 0;
+  const intCountForDefSlot = (ds)=>{
+    if (!ds) return leadIntCount;
+    if (reinf4 && ds.rowKey === reinf4.rowKey) return leadIntCount + reinf3Int + reinf4Int;
+    if (reinf3 && ds.rowKey === reinf3.rowKey) return leadIntCount + reinf3Int;
+    return leadIntCount;
+  };
   const waveWeather = inferBattleWeatherFromLeads(data, state, [a0, a1].filter(Boolean), [lead0, lead1].filter(Boolean));
 
   const applyEnemyIntimidateToSettings = (s0, attMon, intCount)=>{
@@ -641,26 +653,71 @@ function renderWavePlanner(state, waveKey, slots, wp){
     };
   };
 
-  const bestMoveForMon = (att, defSlot)=>{
+  const bestMoveForMon = (att, defSlot, otherDefSlot=null, allyMon=null, attackerItem=null)=>{
     if (!att || !defSlot) return null;
-    const atk = {species:(att.effectiveSpecies||att.baseSpecies), level: state.settings.claimedLevel, ivAll: state.settings.claimedIV, evAll: att.strength?state.settings.strengthEV:state.settings.claimedEV};
-    const def = {species:defSlot.defender, level:defSlot.level, ivAll: state.settings.wildIV, evAll: state.settings.wildEV};
+
+    const atk = {
+      species:(att.effectiveSpecies||att.baseSpecies),
+      level: state.settings.claimedLevel,
+      ivAll: state.settings.claimedIV,
+      evAll: att.strength?state.settings.strengthEV:state.settings.claimedEV,
+    };
+    const def = {
+      species:defSlot.defender,
+      level:defSlot.level,
+      ivAll: state.settings.wildIV,
+      evAll: state.settings.wildEV,
+    };
 
     const forced = (wp && wp.attackMoveOverride) ? (wp.attackMoveOverride[att.id] || null) : null;
     const pool = filterMovePoolForCalc({ppMap: state.pp || {}, monId: att.id, movePool: att.movePool || [], forcedMoveName: forced});
 
-    const sW0 = settingsForWave(state, wp, att.id, defSlot.rowKey, defSlot.defender);
-    const sWInt = applyEnemyIntimidateToSettings(sW0, att, leadIntCount);
-    const sW = withWeatherSettings(sWInt, waveWeather);
+    const base0 = settingsForWave(state, wp, att.id, defSlot.rowKey, defSlot.defender);
+    const base1 = {
+      ...base0,
+      attackerItem: (attackerItem || null),
+      attackerAbility: (att.ability || base0.attackerAbility || ''),
+    };
+    const sInt = applyEnemyIntimidateToSettings(base1, att, intCountForDefSlot(defSlot));
+    const s = withWeatherSettings(sInt, waveWeather);
 
-    return calc.chooseBestMove({
-      data,
-      attacker: atk,
-      defender: def,
-      movePool: pool,
-      settings: sW,
-      tags: defSlot.tags||[],
-    }).best;
+    let otherDef = null;
+    let otherS = null;
+    let otherT = null;
+    if (otherDefSlot){
+      otherDef = {
+        species: otherDefSlot.defender,
+        level: otherDefSlot.level,
+        ivAll: state.settings.wildIV,
+        evAll: state.settings.wildEV,
+      };
+      const o0 = settingsForWave(state, wp, att.id, otherDefSlot.rowKey, otherDefSlot.defender);
+      const o1 = {
+        ...o0,
+        attackerItem: (attackerItem || null),
+        attackerAbility: (att.ability || o0.attackerAbility || ''),
+      };
+      const oInt = applyEnemyIntimidateToSettings(o1, att, intCountForDefSlot(otherDefSlot));
+      otherS = withWeatherSettings(oInt, waveWeather);
+      otherT = otherDefSlot.tags || [];
+    }
+
+    try{
+      return chooseBestMoveDisciplined({
+        data,
+        attacker: atk,
+        defender: def,
+        movePool: pool,
+        settings: s,
+        tags: defSlot.tags||[],
+        otherDefender: otherDef,
+        otherSettings: otherS,
+        otherTags: otherT,
+        allyRosterMon: allyMon,
+      });
+    }catch(e){
+      return null;
+    }
   };
 
   const attackerActsFirst = (best)=>{
@@ -710,10 +767,10 @@ function renderWavePlanner(state, waveKey, slots, wp){
   const planTable = el('div', {class:'plan'});
 
   if (a0 && a1 && lead0 && lead1){
-    const mA0 = bestMoveForMon(a0, lead0);
-    const mA1 = bestMoveForMon(a0, lead1);
-    const mB0 = bestMoveForMon(a1, lead0);
-    const mB1 = bestMoveForMon(a1, lead1);
+    const mA0 = bestMoveForMon(a0, lead0, lead1, a1, null);
+    const mA1 = bestMoveForMon(a0, lead1, lead0, a1, null);
+    const mB0 = bestMoveForMon(a1, lead0, lead1, a0, null);
+    const mB1 = bestMoveForMon(a1, lead1, lead0, a0, null);
     const chosen = chooseLeadAssignment(mA0,mA1,mB0,mB1);
     const left = chosen.swap ? {att:a0, def:lead1, best:mA1} : {att:a0, def:lead0, best:mA0};
     const right = chosen.swap ? {att:a1, def:lead0, best:mB0} : {att:a1, def:lead1, best:mB1};
@@ -3708,7 +3765,7 @@ const headLeft = el('div', {}, [
       attackerItem: (loadout?.item || null),
       attackerAbility: (attMon.ability || sW0.attackerAbility || ''),
     };
-    const sWInt = applyEnemyIntimidateToSettings(sW1, attMon, leadIntCount);
+    const sWInt = applyEnemyIntimidateToSettings(sW1, attMon, intCountForDefSlot(defSlot));
     const sW = withWeatherSettings(sWInt, waveWeather);
     try{
       return calc.chooseBestMove({data, attacker: atk, defender: def, movePool: pool, settings: sW, tags: defSlot.tags||[]}).best;
@@ -3801,10 +3858,13 @@ const headLeft = el('div', {}, [
         const la = pickBestLoadoutFor(a, curMode);
         const lb = pickBestLoadoutFor(b, curMode);
 
-        const mA0 = la.leadMoves?.m0 || bestMoveForMon(a, d0);
-        const mA1 = la.leadMoves?.m1 || bestMoveForMon(a, d1);
-        const mB0 = lb.leadMoves?.m0 || bestMoveForMon(b, d0);
-        const mB1 = lb.leadMoves?.m1 || bestMoveForMon(b, d1);
+        const allyB = (lb.monRef ? {...lb.monRef, item: (lb.item||null)} : {...b, item:(lb.item||null)});
+        const allyA = (la.monRef ? {...la.monRef, item: (la.item||null)} : {...a, item:(la.item||null)});
+
+        const mA0 = bestMoveForMon(la.monRef || a, d0, d1, allyB, la.item);
+        const mA1 = bestMoveForMon(la.monRef || a, d1, d0, allyB, la.item);
+        const mB0 = bestMoveForMon(lb.monRef || b, d0, d1, allyA, lb.item);
+        const mB1 = bestMoveForMon(lb.monRef || b, d1, d0, allyA, lb.item);
 
         const chosen = chooseLeadAssignment(mA0,mA1,mB0,mB1);
         const leftBest = chosen.swap ? mA1 : mA0;
@@ -3823,13 +3883,37 @@ const headLeft = el('div', {}, [
           if ((am && am.oneShot) || (bm && bm.oneShot)) clearAll += 1;
         }
 
-        pairs.push({a,b, ohkoPairs, prioAvg, worstPrio, overkill, clearAll, la, lb});
+        // Conservative focus-fire heuristic (no swap simulation):
+        // - Requires 2 lead KOs on T1 (both leads OHKO by the chosen assignment).
+        // - For 3 defenders: focus the last joiner (Reinf#3) on T2.
+        // - For 4 defenders: focus the next joiner (Reinf#3) on T2; ignore Reinf#4.
+        // - Only counts if neither attacker has a solo OHKO on that focus target.
+        let focus = 0;
+        let effClear = clearAll;
+        const defCount = allDef.length;
+        if ((defCount === 3 || defCount === 4) && ohkoPairs === 2){
+          const focusSlot = allDef[2] || null; // first joiner
+          if (focusSlot){
+            const aFocus = bestMoveForMon(la.monRef || a, focusSlot, null, allyB, la.item);
+            const bFocus = bestMoveForMon(lb.monRef || b, focusSlot, null, allyA, lb.item);
+            if (!(aFocus && aFocus.oneShot) && !(bFocus && bFocus.oneShot)){
+              const sum = (aFocus?.minPct ?? 0) + (bFocus?.minPct ?? 0);
+              if (sum >= 100){
+                focus = 1;
+                effClear = Math.min(defCount, clearAll + 1);
+              }
+            }
+          }
+        }
+
+        pairs.push({a,b, ohkoPairs, prioAvg, worstPrio, overkill, clearAll, effClear, focus, la, lb});
       }
     }
 
     pairs.sort((x,y)=>{
-      if (x.clearAll !== y.clearAll) return y.clearAll - x.clearAll;
+      if (x.effClear !== y.effClear) return y.effClear - x.effClear;
       if (x.ohkoPairs !== y.ohkoPairs) return y.ohkoPairs - x.ohkoPairs;
+      if (x.clearAll !== y.clearAll) return y.clearAll - x.clearAll;
       if (x.worstPrio !== y.worstPrio) return x.worstPrio - y.worstPrio;
       if (x.prioAvg !== y.prioAvg) return x.prioAvg - y.prioAvg;
       return (x.overkill ?? 0) - (y.overkill ?? 0);
@@ -3854,7 +3938,8 @@ const headLeft = el('div', {}, [
       const chipEl = el('div', {class:'chip'});
       chipEl.appendChild(el('strong', {}, `${rosterLabel(p.a)} + ${rosterLabel(p.b)}`));
       chipEl.appendChild(el('span', {class:'muted'}, ` · OHKO ${p.ohkoPairs}/2`));
-      chipEl.appendChild(el('span', {class:'muted'}, ` · clear ${p.clearAll}/${allDef.length}`));
+      chipEl.appendChild(el('span', {class:'muted'}, ` · clear ${p.effClear}/${allDef.length}`));
+      if (p.focus) chipEl.appendChild(el('span', {class:'muted'}, ` · focus ${p.focus}`));
       chipEl.appendChild(el('span', {class:'muted'}, ` · prioØ ${formatPrioAvg(p.prioAvg)}`));
       if (curMode !== 'clean'){
         const modeTag = (curMode === 'items') ? 'items'

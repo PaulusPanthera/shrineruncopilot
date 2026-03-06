@@ -284,7 +284,7 @@ function spreadMult(targetsDamaged){
 // Move selection policy used by Auto starter picking.
 // Avoid AoE moves unless they can double-OHKO both on-field defenders,
 // or there is no viable non-AoE damaging move.
-function chooseBestMoveDisciplined({data, attacker, defender, movePool, settings, tags, otherDefender=null, otherSettings=null, otherTags=null, allyRosterMon=null}){
+export function chooseBestMoveDisciplined({data, attacker, defender, movePool, settings, tags, otherDefender=null, otherSettings=null, otherTags=null, allyRosterMon=null}){
   const calc = (window && window.SHRINE_CALC) ? window.SHRINE_CALC : null;
   if (!calc) return null;
 
@@ -299,6 +299,8 @@ function chooseBestMoveDisciplined({data, attacker, defender, movePool, settings
     let bestDouble = null;
     const pickBetter = (a,b)=>{
       if (!b) return true;
+      // Prefer non-friendly-fire double-OHKO if prio is equal.
+      if (!!a?.ffRisk !== !!b?.ffRisk) return !a.ffRisk;
       const ap = a?.prio ?? 9;
       const bp = b?.prio ?? 9;
       if (ap !== bp) return ap < bp;
@@ -322,7 +324,7 @@ function chooseBestMoveDisciplined({data, attacker, defender, movePool, settings
 
       const minA = (rrA.minPct ?? 0) * mult;
       const minB = (rrB?.ok ? ((rrB.minPct ?? 0) * mult) : 0);
-      if (minA >= 100 && minB >= 100 && !ffRisk){
+      if (minA >= 100 && minB >= 100){
         const cand = {
           ...rrA,
           prio: Number(m.prio)||2,
@@ -330,6 +332,7 @@ function chooseBestMoveDisciplined({data, attacker, defender, movePool, settings
           maxPct: (rrA.maxPct ?? rrA.minPct ?? 0) * mult,
           oneShot: true,
           otherMinPct: minB,
+          ffRisk: !!ffRisk,
         };
         if (pickBetter(cand, bestDouble)) bestDouble = cand;
       }
@@ -815,10 +818,34 @@ export function autoPickStartersAndOrdersForWave(data, state, wp, slotByKey){
         if ((b0 && b0.oneShot) || (b1 && b1.oneShot)) clearAll += 1;
       }
 
-      const cand = {a, b, clearAll, ohkoPairs: lead.bothOhko, worstPrio: lead.worstPrio, prioAvg: lead.prioAvg, overkill: lead.overkill};
+      let focus = 0;
+      let effClear = clearAll;
+      const defCount = allDefSlots.length;
+      if ((defCount === 3 || defCount === 4) && lead.bothOhko === 2){
+        const focusSlot = allDefSlots[2] || null; // first joiner (Reinf #3)
+        if (focusSlot){
+          const defObj = {species:focusSlot.defender, level:focusSlot.level, ivAll: state.settings.wildIV, evAll: state.settings.wildEV};
+          const ic = intCountForDefSlot(focusSlot);
+          const s0 = withWeatherSettings(applyEnemyIntimidateToSettings(settingsForWave(state, wp, a.id, focusSlot.rowKey, focusSlot.defender), a, ic), waveWeather);
+          const s1 = withWeatherSettings(applyEnemyIntimidateToSettings(settingsForWave(state, wp, b.id, focusSlot.rowKey, focusSlot.defender), b, ic), waveWeather);
+          const b0 = chooseBestMoveDisciplined({data, attacker: atkA, defender: defObj, movePool: poolA, settings: s0, tags: focusSlot.tags||[], allyRosterMon: b});
+          const b1 = chooseBestMoveDisciplined({data, attacker: atkB, defender: defObj, movePool: poolB, settings: s1, tags: focusSlot.tags||[], allyRosterMon: a});
+          if (!(b0 && b0.oneShot) && !(b1 && b1.oneShot)){
+            const sum = (b0?.minPct ?? 0) + (b1?.minPct ?? 0);
+            if (sum >= 100){
+              focus = 1;
+              effClear = Math.min(defCount, clearAll + 1);
+            }
+          }
+        }
+      }
+
+
+      const cand = {a, b, clearAll, effClear, focus, ohkoPairs: lead.bothOhko, worstPrio: lead.worstPrio, prioAvg: lead.prioAvg, overkill: lead.overkill};
       const betterCand = (x,y)=>{
-        if (x.clearAll !== y.clearAll) return x.clearAll > y.clearAll;
+        if (x.effClear !== y.effClear) return x.effClear > y.effClear;
         if (x.ohkoPairs !== y.ohkoPairs) return x.ohkoPairs > y.ohkoPairs;
+        if (x.clearAll !== y.clearAll) return x.clearAll > y.clearAll;
         if (x.worstPrio !== y.worstPrio) return x.worstPrio < y.worstPrio;
         if (x.prioAvg !== y.prioAvg) return x.prioAvg < y.prioAvg;
         return x.overkill <= y.overkill;
