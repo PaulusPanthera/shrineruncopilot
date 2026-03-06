@@ -614,20 +614,7 @@ function renderWavePlanner(state, waveKey, slots, wp){
 
   const lead0 = picked[0]?.slot || null;
   const lead1 = picked[1]?.slot || null;
-  // Enemy Intimidate stacking: both lead INT abilities trigger at battle start.
-  // Reinforcement INT triggers when that slot joins (3rd/4th defender), affecting later turns.
   const leadIntCount = [lead0, lead1].filter(x => (x?.tags||[]).includes('INT')).length;
-  const reinf3 = picked[2]?.slot || null;
-  const reinf4 = picked[3]?.slot || null;
-  const reinf3Int = (reinf3?.tags||[]).includes('INT') ? 1 : 0;
-  const reinf4Int = (reinf4?.tags||[]).includes('INT') ? 1 : 0;
-  const intCountForDefSlot = (defSlot)=>{
-    if (!defSlot) return leadIntCount;
-    const rk = String(defSlot.rowKey||'');
-    if (reinf4 && rk === String(reinf4.rowKey)) return leadIntCount + reinf3Int + reinf4Int;
-    if (reinf3 && rk === String(reinf3.rowKey)) return leadIntCount + reinf3Int;
-    return leadIntCount;
-  };
   const waveWeather = inferBattleWeatherFromLeads(data, state, [a0, a1].filter(Boolean), [lead0, lead1].filter(Boolean));
 
   const applyEnemyIntimidateToSettings = (s0, attMon, intCount)=>{
@@ -663,7 +650,7 @@ function renderWavePlanner(state, waveKey, slots, wp){
     const pool = filterMovePoolForCalc({ppMap: state.pp || {}, monId: att.id, movePool: att.movePool || [], forcedMoveName: forced});
 
     const sW0 = settingsForWave(state, wp, att.id, defSlot.rowKey, defSlot.defender);
-    const sWInt = applyEnemyIntimidateToSettings(sW0, att, intCountForDefSlot(defSlot));
+    const sWInt = applyEnemyIntimidateToSettings(sW0, att, leadIntCount);
     const sW = withWeatherSettings(sWInt, waveWeather);
 
     return calc.chooseBestMove({
@@ -1164,6 +1151,9 @@ function renderWavePlanner(state, waveKey, slots, wp){
       for (const it of tipCandidatesForTypes(types)){
         if (canUseBagItem(mon, it)) out.push(it);
       }
+      // Choice Scarf can open speed-gated solves. Show it even if not currently in the Bag
+      // (marked as "buy" in the tooltip/list), so the user sees the option.
+      if (!out.includes('Choice Scarf')) out.push('Choice Scarf');
       return Array.from(new Set(out));
     };
     const bestMoveForMonWithItem = (att, defSlot, itemName)=>{
@@ -1175,7 +1165,7 @@ function renderWavePlanner(state, waveKey, slots, wp){
 
       const sW0 = settingsForWave(state, wp, att.id, defSlot.rowKey, defSlot.defender);
       const sW1 = {...sW0, attackerItem: itemName};
-      const sWInt = applyEnemyIntimidateToSettings(sW1, att, intCountForDefSlot(defSlot));
+      const sWInt = applyEnemyIntimidateToSettings(sW1, att, leadIntCount);
       const sW = withWeatherSettings(sWInt, waveWeather);
       try{
         return calc.chooseBestMove({data, attacker: atk, defender: def, movePool: pool, settings: sW, tags: defSlot.tags||[]}).best;
@@ -1188,6 +1178,8 @@ function renderWavePlanner(state, waveKey, slots, wp){
       const baseFast = attackerActsFirst(baseBest);
       const tips = [];
       for (const it of candidateTipItems(att)){
+        const have = canUseBagItem(att, it);
+        if (!have && it !== 'Choice Scarf') continue;
         const b = bestMoveForMonWithItem(att, defSlot, it);
         if (!b) continue;
         const fast = attackerActsFirst(b);
@@ -1197,7 +1189,7 @@ function renderWavePlanner(state, waveKey, slots, wp){
           ? (Number(b.prio) < Number(baseBest.prio) && (!!b.oneShot || !baseBest.oneShot))
           : false;
         if (!gainFast && !gainOhko && !gainPrio) continue;
-        tips.push({item: it, best: b, gainFast, gainOhko, gainPrio});
+        tips.push({item: it, best: b, gainFast, gainOhko, gainPrio, have});
       }
       tips.sort((a,b)=>{
         const ao = a.gainFast?1:0; const bo = b.gainFast?1:0;
@@ -1265,7 +1257,7 @@ function renderWavePlanner(state, waveKey, slots, wp){
       const pool = filterMovePoolForCalc({ppMap: state.pp || {}, monId: att.id, movePool: hyp.movePool || [], forcedMoveName: forced});
 
       const sW0 = settingsForWave(state, wp, att.id, defSlot.rowKey, defSlot.defender);
-      const sWInt = applyEnemyIntimidateToSettings(sW0, hyp, intCountForDefSlot(defSlot));
+      const sWInt = applyEnemyIntimidateToSettings(sW0, hyp, leadIntCount);
       const sW = withWeatherSettings(sWInt, waveWeather);
       try{
         return calc.chooseBestMove({data, attacker: atk, defender: def, movePool: pool, settings: sW, tags: defSlot.tags||[]}).best;
@@ -1311,7 +1303,8 @@ function renderWavePlanner(state, waveKey, slots, wp){
     const fmtTip = (t)=>{
       const flags = [t.gainFast ? 'FAST' : null, t.gainOhko ? 'OHKO' : null, t.gainPrio ? 'lower prio' : null].filter(Boolean);
       const fx = flags.length ? ` (${flags.join(', ')})` : '';
-      return `${t.item}${fx} → ${t.best?.move||'—'} (P${t.best?.prio||'?'} ${formatPct(t.best?.minPct||0)})`;
+      const buy = (t.have === false) ? ' (buy)' : '';
+      return `${t.item}${buy}${fx} → ${t.best?.move||'—'} (P${t.best?.prio||'?'} ${formatPct(t.best?.minPct||0)})`;
     };
     const tipLines = [];
     if (tipsLeft.length) tipLines.push(`${rosterLabel(left.att)} vs ${left.def.defender}: ${tipsLeft.map(fmtTip).join(' · ')}`);
