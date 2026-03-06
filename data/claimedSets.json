@@ -1411,10 +1411,10 @@
     "ability": "Sheer Force",
     "canClaim": 1,
     "moves": [
-      "Earthquake",
-      "Sludge Wave",
-      "Ice Beam",
-      "Protect"
+      "Sludge Bomb",
+      "Earth Power",
+      "Blizzard",
+      "Toxic"
     ],
     "species": "Nidoqueen"
   },

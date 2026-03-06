@@ -3,6 +3,8 @@
 // Attack overview panel (shown on Waves) extracted from js/app/app.js.
 
 import { el, pill, formatPct, sprite } from '../dom.js';
+import { getItemIcon } from '../icons.js';
+import { availableCount } from '../../domain/items.js';
 import {
   spriteStatic,
   rosterLabel,
@@ -62,7 +64,7 @@ export function createAttackOverview({ data, calc, store, els }){
     }
     if (titleEl) titleEl.textContent = defName;
     if (metaEl) metaEl.textContent = `Lv ${level}` + (tags.length ? ` · ${tags.join(', ')}` : '');
-    if (hintEl) hintEl.textContent = 'One-shot info vs your active roster (OHKO = best by prio; otherwise closest-to-kill).';
+    if (hintEl) hintEl.textContent = 'One-shot info vs your active roster (OHKO = best by prio · otherwise closest-to-kill).';
 
     const roster = (state.roster||[]).filter(r=>r && r.active);
     const defObj = {species:defName, level, ivAll: state.settings.wildIV, evAll: state.settings.wildEV};
@@ -85,23 +87,103 @@ export function createAttackOverview({ data, calc, store, els }){
       };
       const defAb = enemyAbilityForSpecies(data, defName);
       const weather = inferBattleWeatherFromLeads(data, state, [r], [{defender:defName, level}]);
+      const movePool = filterMovePoolForCalc({ppMap: state.pp || {}, monId: r.id, movePool: r.movePool || []});
+      const settingsBase = {
+        ...state.settings,
+        attackerItem: r.item || null,
+        defenderItem: null,
+        attackerAbility: (r.ability||''),
+        defenderAbility: defAb,
+        weather,
+      };
+
       const res = calc.chooseBestMove({
         data,
         attacker: atk,
         defender: defObj,
-        movePool: filterMovePoolForCalc({ppMap: state.pp || {}, monId: r.id, movePool: r.movePool || []}),
-        settings: {
-          ...state.settings,
-          attackerItem: r.item || null,
-          defenderItem: null,
-          attackerAbility: (r.ability||''),
-          defenderAbility: defAb,
-          weather,
-        },
+        movePool,
+        settings: settingsBase,
         tags,
       });
       if (!res?.best) continue;
-      rows.push({r, best: res.best});
+
+      // UI policy: if no OHKO exists, show the attack that comes closest to killing (highest min%).
+      let best = res.best;
+      const anyOhko = (res.all||[]).some(x=>x && x.oneShot);
+      if (!anyOhko && (res.all||[]).length){
+        const pool = (res.all||[]).slice().sort((a,b)=>{
+          const am = Number(a.minPct||0);
+          const bm = Number(b.minPct||0);
+          if (am !== bm) return bm-am;
+          const ap = a.prio ?? 9;
+          const bp = b.prio ?? 9;
+          if (ap !== bp) return ap-bp;
+          return String(a.move||'').localeCompare(String(b.move||''));
+        });
+        best = pool[0];
+      }
+
+      // Optional hints:
+      // - SCARF: if currently SLOW, Choice Scarf would flip to OK.
+      // - ITEM: if currently not OHKO, an owned item would make this move an OHKO.
+      let scarfFlip = false;
+      if (best?.slower){
+        try{
+          const rr = calc.computeDamageRange({
+            data,
+            attacker: atk,
+            defender: defObj,
+            moveName: best.move,
+            settings: {...settingsBase, attackerItem: 'Choice Scarf'},
+            tags,
+          });
+          scarfFlip = !!(rr?.ok && !rr.slower);
+        }catch(e){ scarfFlip = false; }
+      }
+
+      let itemHint = null;
+      if (best && !best.oneShot){
+        // Only consider *owned* offensive items for the hint.
+        const bag = state.bag || {};
+        const owned = Object.keys(bag).filter(k=> (bag[k]||0) > 0);
+        const cand = owned.filter(k=> (
+          k === 'Life Orb' ||
+          k === 'Expert Belt' ||
+          k === 'Choice Band' ||
+          k === 'Choice Specs' ||
+          k === 'Wise Glasses' ||
+          k === 'Muscle Band' ||
+          String(k).endsWith(' Plate') ||
+          String(k).endsWith(' Gem')
+        ));
+
+        let bestItem = null;
+        let bestMin = null;
+        for (const it of cand){
+          if (it === 'Choice Scarf') continue;
+          try{
+            const rr = calc.computeDamageRange({
+              data,
+              attacker: atk,
+              defender: defObj,
+              moveName: best.move,
+              settings: {...settingsBase, attackerItem: it},
+              tags,
+            });
+            if (!rr?.ok || !rr.oneShot) continue;
+            const m = Number(rr.minPct||0);
+            if (bestItem == null || Math.abs(m-100) < Math.abs((bestMin||0)-100)){
+              bestItem = it;
+              bestMin = m;
+            }
+          }catch(e){ /* ignore */ }
+        }
+        if (bestItem){
+          itemHint = {item: bestItem, minPct: bestMin};
+        }
+      }
+
+      rows.push({r, best, scarfFlip, itemHint});
     }
 
     rows.sort((a,b)=>{
@@ -144,39 +226,33 @@ export function createAttackOverview({ data, calc, store, els }){
       ]);
 
       const pr = `P${row.best.prio}`;
-
-      const speedCell = el('div', {style:'display:flex; align-items:center; gap:8px; flex-wrap:wrap'});
       const speedPill = row.best.slower ? pill('SLOW','warn danger') : pill('OK','good');
-      speedCell.appendChild(speedPill);
 
-      // Scarf hint: if currently slower, indicate whether Choice Scarf would flip the speed check.
-      // (We treat scarf as a simple 1.5× speed multiplier. If your current item is already Scarf,
-      // this remains 'SLOW' and no extra hint is shown.)
-      if (row.best.slower && (row.r.item || '') !== 'Choice Scarf'){
-        const atkSpe = Number(row.best.attackerSpe || 0);
-        const defSpe = Number(row.best.defenderSpe || 0);
-        const atkSpeScarf = Math.floor(atkSpe * 1.5);
-        const needsStrict = !!state.settings.enemySpeedTieActsFirst;
-        const scarfWins = needsStrict ? (atkSpeScarf > defSpe) : (atkSpeScarf >= defSpe);
-        if (scarfWins){
-          const have = Number(state.bag?.['Choice Scarf'] || 0) > 0;
-          const sp = pill('SCARF', have ? 'good' : 'warn');
-          sp.title = have
-            ? `Outspeed possible with Choice Scarf (Spe ${atkSpe}→${atkSpeScarf} vs ${defSpe}).`
-            : `Outspeed possible with Choice Scarf (not in bag). Spe ${atkSpe}→${atkSpeScarf} vs ${defSpe}.`;
-          speedCell.appendChild(sp);
-        }
+      const scarfPill = row.scarfFlip ? pill('SCARF', availableCount(state, 'Choice Scarf') > 0 ? 'good' : 'warn') : null;
+      if (scarfPill){
+        const have = availableCount(state, 'Choice Scarf') > 0;
+        scarfPill.title = have ? 'Choice Scarf would outspeed.' : 'Choice Scarf would outspeed (not owned).';
       }
 
       const resPill = row.best.oneShot ? pill('OHKO','good') : pill('NO','bad');
+      let itemEl = null;
+      if (row.itemHint){
+        const src = getItemIcon(row.itemHint.item);
+        if (src){
+          itemEl = el('img', {class:'item-ico', src, alt:'', title:`OHKO possible with owned item: ${row.itemHint.item}`});
+        }else{
+          itemEl = pill('ITEM','warn');
+          itemEl.title = `OHKO possible with owned item: ${row.itemHint.item}`;
+        }
+      }
 
       tbody.appendChild(el('tr', {}, [
         el('td', {}, attackerCell),
         el('td', {}, moveCell),
         el('td', {}, pr),
         el('td', {}, formatPct(row.best.minPct)),
-        el('td', {}, speedCell),
-        el('td', {}, resPill),
+        el('td', {}, el('div', {style:'display:flex; gap:8px; align-items:center'}, [speedPill, scarfPill].filter(Boolean))),
+        el('td', {}, el('div', {style:'display:flex; gap:8px; align-items:center'}, [resPill, itemEl].filter(Boolean))),
       ]));
     }
 

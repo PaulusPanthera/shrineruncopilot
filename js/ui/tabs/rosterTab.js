@@ -3,6 +3,7 @@
 // Roster tab UI (party 4x4 + compact details header).
 
 import { $, el, clampInt, sprite } from '../dom.js';
+import { spriteStatic } from '../battleUiHelpers.js';
 import { fixName } from '../../data/nameFixes.js';
 import {
   makeRosterEntryFromClaimedSetWithFallback,
@@ -79,6 +80,12 @@ export function createRosterTab(ctx){
   // UI-only swap state (not persisted)
   let armedSlot = null;
   let swapMode = false;
+
+  const rosterSpriteSrc = (species, isActive)=>{
+    const sp = String(species||'');
+    if (!sp) return '';
+    return isActive ? sprite(calc, sp) : spriteStatic(calc, sp);
+  };
 
   function partyIndexForRosterId(state, rid){
     const slots = state?.party?.slots;
@@ -252,7 +259,7 @@ export function createRosterTab(ctx){
     const eff = r.effectiveSpecies || r.baseSpecies;
     const starter = isStarterSpecies(r.baseSpecies);
 
-    const spImg = el('img', {class:'sprite sprite-lg', src:sprite(calc, eff), alt:eff});
+    const spImg = el('img', {class:'sprite sprite-lg', src:rosterSpriteSrc(eff, !!r.active), alt:eff});
     spImg.onerror = ()=> spImg.style.opacity = '0.25';
 
     const openDex = ()=>{
@@ -296,9 +303,12 @@ export function createRosterTab(ctx){
     // Compact tools
     const activeChk = el('input', {type:'checkbox', checked: !!r.active});
     activeChk.addEventListener('change', ()=>{
+      const nextActive = !!activeChk.checked;
+      // UI: swap animated GIF ↔ static sprite when toggling active state.
+      spImg.src = rosterSpriteSrc(eff, nextActive);
       store.update(s=>{
         const cur = byId(s.roster, r.id);
-        if (cur) cur.active = !!activeChk.checked;
+        if (cur) cur.active = nextActive;
       });
     });
 
@@ -572,14 +582,16 @@ export function createRosterTab(ctx){
       const label = rosterLabel(mon);
       const starter = isStarterSpecies(mon.baseSpecies);
 
-      const spImg = el('img', {class:'sprite', src:sprite(calc, effSp), alt:label});
+      const spImg = el('img', {class:'sprite', src:rosterSpriteSrc(effSp, !!mon.active), alt:label});
       spImg.onerror = ()=> spImg.style.opacity = '0.25';
 
       const activeChk = el('input', {type:'checkbox', checked: !!mon.active});
       activeChk.addEventListener('change', ()=>{
+        const nextActive = !!activeChk.checked;
+        spImg.src = rosterSpriteSrc(effSp, nextActive);
         store.update(s=>{
           const cur = byId(s.roster, mon.id);
-          if (cur) cur.active = !!activeChk.checked;
+          if (cur) cur.active = nextActive;
         });
       });
 
@@ -1015,7 +1027,7 @@ export function createRosterTab(ctx){
         if (armedSlot === idx) btn.classList.add('armed');
 
         if (mon){
-          const img = el('img', {class:'sprite', src:sprite(calc, eff), alt:label});
+          const img = el('img', {class:'sprite', src:rosterSpriteSrc(eff, !!mon.active), alt:label});
           img.onerror = ()=> img.style.opacity='0.25';
           btn.appendChild(img);
           btn.appendChild(el('div', {class:'party-slot-label'}, label));
